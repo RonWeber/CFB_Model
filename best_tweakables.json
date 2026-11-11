@@ -1,0 +1,12 @@
+{
+    "changed_value": "",
+    "k": 90.0,
+    "scale_factor": 800.0,
+    "fbs_initial_elo": 1250,
+    "fcs_initial_elo": 660,
+    "d2_initial_elo": 500.0,
+    "d3_initial_elo": 500.0,
+    "beatdown_threshold": 16,
+    "return_to_base_in_offseason_factor": 0.09,
+    "return_to_conference_average_in_offseason_factor": 0.375
+}
