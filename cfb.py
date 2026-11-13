@@ -1,6 +1,7 @@
 import cfbd
 import pickle
 import graphic
+import json
 from collections import defaultdict
 from tweakables import InstantiatedTweakables, NextIterationTweakables, DefaultTweakables
 from dataclasses import replace, asdict
@@ -8,16 +9,27 @@ from dataclasses import replace, asdict
 global all_games
 all_games: dict[int, list[cfbd.Game]] = {} # type: ignore
 
-PRINT_TEAMS = ["New Mexico"]
+PRINT_TEAMS = ["Miami (Combined)"]
 # PRINT_TEAMS = []
 CALIBRATION_CUTOFF = 2014
 
 TWEAKABLES_FILE = "best_tweakables.json"
 
+JOKE_MIAMI_MODE = False
+
+all_teams_ever_p5: set[str] = set()
+
 print(f"Loading all games from pickle...")
 with open("all_games.pickle", "rb") as f:
     all_games = pickle.load(f)
 print(f"Loaded.")
+
+def is_p5(team, conference: str|None, year: int):
+    if (year > 2023) and conference == "Pac-12":
+        return False
+    if team == "Notre Dame":
+        return True
+    return conference in ["ACC", "Big Ten", "Big 12", "Pac-12", "SEC", "Big East", "Pac-10"]
 
 class Model:
     def __init__(self, tweakables: InstantiatedTweakables):
@@ -35,12 +47,13 @@ class Model:
         self.most_current_classifications: dict[str, str|None] = {}
         self.most_current_conferences: dict[str,str|None] = {}
 
-    def expected_score(self, our_elo, their_elo):   
-        return 1 / (1 + 10 ** ((their_elo - our_elo) / self.tweakables.scale_factor))
-
     def initial_elo(self, team:str, classification: str|None, conference: str|None):
         if classification == "fbs": # TODO: Factor in P5 vs G5
-            return self.tweakables.fbs_initial_elo
+            if is_p5(team, conference, self.current_year):
+                all_teams_ever_p5.add(team)
+                return self.tweakables.p5_initial_elo
+            else:
+                return self.tweakables.g5_initial_elo
         elif classification == "fcs":
             return self.tweakables.fcs_initial_elo
         elif classification == "d2":
@@ -58,8 +71,8 @@ class Model:
         home_elo = self.elo_ratings[home_team]
         away_elo = self.elo_ratings[away_team]
 
-        expected_home = self.expected_score(home_elo, away_elo)
-        expected_away = self.expected_score(away_elo, home_elo)
+        expected_home = 1 / (1 + 10 ** ((away_elo - home_elo) / self.tweakables.scale_factor))
+        expected_away = 1 / (1 + 10 ** ((home_elo - away_elo) / self.tweakables.scale_factor))
 
         actual_home = 1.0 if home_points > away_points else 0.0
         actual_away = 1.0 if away_points > home_points else 0.0
@@ -69,6 +82,11 @@ class Model:
 
 
     def record_game(self, game: cfbd.Game): # pyright: ignore[reportPrivateImportUsage]
+        if JOKE_MIAMI_MODE:
+            if game.home_team in ["Miami", "Miami (OH)"]:
+                game.home_team = "Miami (Combined)"
+            if game.away_team in ["Miami", "Miami (OH)"]:
+                game.away_team = "Miami (Combined)"
         if game.home_points is None or game.away_points is None:
             print(f"Skipping game with incomplete score: {game.home_team} vs {game.away_team}")
             return
@@ -156,11 +174,16 @@ class Model:
             self.elo_ratings[team] -= (diff * self.tweakables.return_to_base_in_offseason_factor)
             if self.most_current_conferences[team] in conference_averages:
                 conf_avg = conference_averages[self.most_current_conferences[team]]
-                self.elo_ratings[team] += (conf_avg - self.elo_ratings[team]) * self.tweakables.return_to_conference_average_in_offseason_factor
+                if self.most_current_conferences[team] in ["FBS Independents", "FCS Independents"]:
+                    new_diff = self.elo_ratings[team] - base_elo
+                    self.elo_ratings[team] -= (new_diff * self.tweakables.independents_extra_return_to_base_in_offseason_factor)
+                    self.elo_ratings[team] += (conf_avg - self.elo_ratings[team]) * self.tweakables.independents_return_to_conference_average_in_offseason_factor
+                else:
+                    self.elo_ratings[team] += (conf_avg - self.elo_ratings[team]) * self.tweakables.return_to_conference_average_in_offseason_factor
 
 
     def print_top_ranks(self):
-        for team_info in self.get_top_n(35):
+        for team_info in self.get_top_n(100):
             print(f"{team_info['rank']}. {team_info['team']}: {team_info['record']}  ({team_info['elo']} Elo)")
 
     def get_top_n(self, n: int) -> list[dict]:
@@ -271,12 +294,12 @@ def IterateAndCompareModels(baseModel: Model) -> tuple[Model, bool]:
     return overall_best_model, (overall_best_model is baseModel)
 
 def SaveTweakables(tweakables: InstantiatedTweakables):
-    import json
+    if JOKE_MIAMI_MODE:
+        raise RuntimeError("JOKE_MIAMI_MODE is enabled, cannot save tweakables.")
     with open(TWEAKABLES_FILE, "w") as f:
         json.dump(asdict(tweakables), f, indent=4)
 
 def LoadTweakables() -> InstantiatedTweakables|None:
-    import json
     try:
         with open(TWEAKABLES_FILE, "r") as f:
             data = json.load(f)
@@ -309,9 +332,12 @@ if not current_sota:
     current_sota = DefaultTweakables()
 
 baseModel = Model(current_sota)
-# IterateUntilStable(baseModel)
-JustRunModel(baseModel)
+IterateUntilStable(baseModel)
+# JustRunModel(baseModel)
 
+# print("All P5 teams ever:")
+# for team in sorted(all_teams_ever_p5):
+#     print(team)
 
 
 # for k,v in all_games.items():
