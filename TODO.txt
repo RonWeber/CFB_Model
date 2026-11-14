@@ -1,6 +1,3 @@
-- Start teams that were in the Top 25 in 2000 at different ELOs
 - Have K be higher early in the season
 - Have K be higher early in the sample
-- Limit output ratings to teams that exist.
-- Top 25 upsets worse than d2 upsets.
 - Have separate K multipliers for bowl games and playoff games

@@ -11,13 +11,45 @@ from dataclasses import replace, asdict
 global all_games
 all_games: dict[int, list[cfbd.Game]] = {} # type: ignore
 
-PRINT_TEAMS = ["Miami (Combined)", "UCLA"]
+PRINT_TEAMS = ["Miami (Combined)"]
 # PRINT_TEAMS = []
 CALIBRATION_CUTOFF = 2014
 
 TWEAKABLES_FILE = "best_tweakables.json"
 
 JOKE_MIAMI_MODE = False
+
+RANKED_VS_RANKED_UPSET_FRACTION_PENALTY = 100
+
+FILTER_TO_TEAMS_THAT_PLAYED_THIS_YEAR = True
+
+INITIAL_TOP_25 = [
+    "Florida State",
+    "Virginia Tech",
+    "Nebraska",
+    "Wisconsin",
+    "Michigan",
+    "Kansas State",
+    "Michigan State",
+    "Alabama",
+    "Tennessee",
+    "Marshall",
+    "Penn State",
+    "Florida",
+    "Mississippi State",
+    "Southern Miss",
+    "Miami",
+    "Georgia",
+    "Arkansas",
+    "Minnesota",
+    "Oregon",
+    "Georgia Tech",
+    "Texas",
+    "Ole Miss",
+    "Texas A&M",
+    "Illinois",
+    "Purdue",    
+]
 
 print(f"Loading all games from pickle...")
 with open("all_games.pickle", "rb") as f:
@@ -49,6 +81,13 @@ class Model:
         self.most_current_classifications: dict[str, str|None] = {}
         self.most_current_conferences: dict[str,str|None] = {}
         self.last_week_top_25: list[str] = []
+        self.ranked_vs_ranked_games = 0
+        self.ranked_vs_ranked_upsets = 0
+
+    def initialize_initial_top_25(self):
+        for i, team in enumerate(reversed(INITIAL_TOP_25)):
+            # Marshall gets the P5 bonus despite not being in the P5.  They earned it for ending ranked 10.
+            self.elo_ratings[team] = self.tweakables.p5_initial_elo + self.tweakables.initial_top_25_bonus_base + i * self.tweakables.initial_top_25_bonus_marginal
 
     def initial_elo(self, team:str, classification: str|None, conference: str|None):
         if classification == "fbs": # TODO: Factor in P5 vs G5
@@ -117,6 +156,11 @@ class Model:
             if game.season >= CALIBRATION_CUTOFF:
                 self.total_post_cutoff_upsets += 1
                 self.error += self.error_for_game(game.home_team, game.away_team, game.home_classification, game.away_classification)
+        is_ranked_vs_ranked = game.home_team in self.last_week_top_25 and game.away_team in self.last_week_top_25
+        if is_ranked_vs_ranked and game.season >= CALIBRATION_CUTOFF:
+            self.ranked_vs_ranked_games += 1
+            if upset:
+                self.ranked_vs_ranked_upsets += 1
         
         if game.home_team in PRINT_TEAMS or game.away_team in PRINT_TEAMS:
             note_str = f"({game.notes})" if game.notes else ""
@@ -150,9 +194,9 @@ class Model:
             print(f"Non-FBS game: {game.home_team} ({game.home_classification}) vs {game.away_team} ({game.away_classification}) on {game.start_date}")
 
     def error_for_game(self, home_team: str, away_team: str, home_classification: str|None = None, away_classification: str|None = None):
-        # 10 points for top-25 matchups
-        if home_team in self.last_week_top_25 and away_team in self.last_week_top_25:
-            return 10
+        # No additional penalty for Top-25 vs Top-25 because of an amazing bug:
+        # It turns out that if you minimize "Ranked vs Ranked upsets", the result is that the model tries to optimize by minimizing the number of Top-25 vs Top-25 *games!*
+        # 2 points for top-25 matchups
         if home_team in self.last_week_top_25 or away_team in self.last_week_top_25:
             return 2
         # 1 point for any other FBS game
@@ -183,7 +227,7 @@ class Model:
         # (Although nlogn is actually less than 25*n for 300 teams)
         self.last_week_top_25 = [team_info['team'] for team_info in self.get_top_n(25)]
         self.current_week = new_week
-        print(f"Handling new week: {new_week}")
+        # print(f"Handling new week: {new_week}")
 
     def handle_new_year(self, new_year: int):
         # Reset yearly statistics at the start of the new year
@@ -210,13 +254,18 @@ class Model:
                 else:
                     self.elo_ratings[team] += (conf_avg - self.elo_ratings[team]) * self.tweakables.return_to_conference_average_in_offseason_factor
 
+        if not self.elo_ratings:
+            self.initialize_initial_top_25()
+
 
     def print_top_ranks(self):
-        for team_info in self.get_top_n(100):
+        for team_info in self.get_top_n(25):
             print(f"{team_info['rank']}. {team_info['team']}: {team_info['record']}  ({team_info['elo']} Elo)")
 
     def get_top_n(self, n: int) -> list[dict]:
         sorted_teams = sorted(self.elo_ratings.items(), key=lambda item: item[1], reverse=True)
+        if FILTER_TO_TEAMS_THAT_PLAYED_THIS_YEAR:
+            sorted_teams = [team for team in sorted_teams if (team[0] in self.wins_this_year or team[0] in self.losses_this_year)]
         top_n = []
         for i, (team, _) in enumerate(sorted_teams[:n], start=1):
             top_n.append({
@@ -233,7 +282,8 @@ class Model:
         return self.get_top_n(25)
 
     def model_error(self) -> float:
-        return self.error
+        ranked_vs_ranked_upset_fraction = self.ranked_vs_ranked_upsets / self.ranked_vs_ranked_games
+        return self.error + (RANKED_VS_RANKED_UPSET_FRACTION_PENALTY * ranked_vs_ranked_upset_fraction)
 
 def iterate_over_season(games: list[cfbd.Game], year: int, models: list[Model]): # pyright: ignore[reportPrivateImportUsage]
     for model in models:
@@ -363,5 +413,5 @@ if not current_sota:
     current_sota = DefaultTweakables()
 
 baseModel = Model(current_sota)
-# IterateUntilStable(baseModel)
+IterateUntilStable(baseModel)
 JustRunModel(baseModel)
