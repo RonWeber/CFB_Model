@@ -1,15 +1,15 @@
 {
-    "changed_value": "p5_initial_elo",
-    "k": 90.0,
-    "scale_factor": 400.0,
-    "p5_initial_elo": 1500.0,
-    "g5_initial_elo": 1000.0,
-    "fcs_initial_elo": 630.0,
-    "d2_initial_elo": 500.0,
+    "changed_value": "independents_extra_return_to_base_in_offseason_factor",
+    "k": 66.825,
+    "scale_factor": 2000.0,
+    "p5_initial_elo": 1012.5,
+    "g5_initial_elo": 990.0,
+    "fcs_initial_elo": 787.5,
+    "d2_initial_elo": 625.0,
     "d3_initial_elo": 500.0,
-    "beatdown_threshold": 16,
-    "return_to_base_in_offseason_factor": 0.1875,
-    "return_to_conference_average_in_offseason_factor": 0.1485,
-    "independents_extra_return_to_base_in_offseason_factor": 0.025,
-    "independents_return_to_conference_average_in_offseason_factor": 0.15
+    "beatdown_threshold": 17.6,
+    "return_to_base_in_offseason_factor": 0.37125,
+    "return_to_conference_average_in_offseason_factor": 0.013365,
+    "independents_extra_return_to_base_in_offseason_factor": 0.00025,
+    "independents_return_to_conference_average_in_offseason_factor": 0.0075
 }

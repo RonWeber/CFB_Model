@@ -37,7 +37,7 @@ def generate_graphic(model):
         else:
             right_rows += row_html
 
-    output_html = template.replace("{{ left_rows }}", left_rows).replace("{{ right_rows }}", right_rows).replace("{{ current_week }}", str(model.current_week))
+    output_html = template.replace("{{ left_rows }}", left_rows).replace("{{ right_rows }}", right_rows).replace("{{ current_week }}", str(model.last_week_with_games))
 
     with open(OUTPUT_FILE, "w") as f:
         f.write(output_html)
