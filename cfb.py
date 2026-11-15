@@ -13,7 +13,7 @@ all_games: dict[int, list[cfbd.Game]] = {} # type: ignore
 
 PRINT_TEAMS = ["Miami (Combined)"]
 # PRINT_TEAMS = []
-CALIBRATION_CUTOFF = 2014
+CALIBRATION_CUTOFF = 2015
 
 TWEAKABLES_FILE = "best_tweakables.json"
 
@@ -86,6 +86,8 @@ class Model:
 
     def initialize_initial_top_25(self):
         for i, team in enumerate(reversed(INITIAL_TOP_25)):
+            if JOKE_MIAMI_MODE and team == "Miami":
+                team = "Miami (Combined)"
             # Marshall gets the P5 bonus despite not being in the P5.  They earned it for ending ranked 10.
             self.elo_ratings[team] = self.tweakables.p5_initial_elo + self.tweakables.initial_top_25_bonus_base + i * self.tweakables.initial_top_25_bonus_marginal
 
@@ -111,7 +113,7 @@ class Model:
             # raise ValueError(f"Unknown classification '{classification}' for team '{team}'!")
 
 
-    def adjust_elo(self, home_team: str, away_team: str, home_points: int, away_points: int):
+    def adjust_elo(self, k:float, home_team: str, away_team: str, home_points: int, away_points: int):
         home_elo = self.elo_ratings[home_team]
         away_elo = self.elo_ratings[away_team]
 
@@ -121,8 +123,8 @@ class Model:
         actual_home = 1.0 if home_points > away_points else 0.0
         actual_away = 1.0 if away_points > home_points else 0.0
 
-        self.elo_ratings[home_team] += self.tweakables.k * (actual_home - expected_home)
-        self.elo_ratings[away_team] += self.tweakables.k * (actual_away - expected_away)
+        self.elo_ratings[home_team] += k * (actual_home - expected_home)
+        self.elo_ratings[away_team] += k * (actual_away - expected_away)
 
 
     def record_game(self, game: cfbd.Game): # pyright: ignore[reportPrivateImportUsage]
@@ -140,16 +142,32 @@ class Model:
             self.total_wins[winner] = 0
         self.total_wins[winner] += 1
 
+        is_playoff = game.playoff is not None
+        is_non_playoff_bowl = (self.current_week == "Postseason") and not is_playoff
+        k = self.tweakables.k
+        if is_playoff:
+            k *= self.tweakables.playoff_k_multiplier
+        elif is_non_playoff_bowl:
+            k *= self.tweakables.non_playoff_bowl_k_multiplier
+
+        if self.current_week != "Postseason":
+            k_bonus = self.tweakables.early_in_season_k_bonus * (self.tweakables.early_in_season_k_bonus_falloff ** (self.current_week - 1))
+            k += k_bonus
+
+        year_in_sample = self.current_year - 1999
+        k_early_in_sample_bonus = self.tweakables.early_in_sample_k_bonus * (self.tweakables.early_in_sample_k_bonus_falloff ** (year_in_sample - 1))
+        k += k_early_in_sample_bonus
+
         if game.home_team not in self.elo_ratings:
             self.elo_ratings[game.home_team] = self.initial_elo(game.home_team, game.home_classification, game.home_conference)
         if game.away_team not in self.elo_ratings:
             self.elo_ratings[game.away_team] = self.initial_elo(game.away_team, game.away_classification, game.away_conference)
         old_home_elo = self.elo_ratings[game.home_team]
         old_away_elo = self.elo_ratings[game.away_team]
-        self.adjust_elo(game.home_team, game.away_team, game.home_points, game.away_points)
+        self.adjust_elo(k, game.home_team, game.away_team, game.home_points, game.away_points)
         beatdown = abs(game.home_points - game.away_points) >= self.tweakables.beatdown_threshold
         if beatdown:
-            self.adjust_elo(game.home_team, game.away_team, game.home_points, game.away_points)
+            self.adjust_elo(k, game.home_team, game.away_team, game.home_points, game.away_points)
         upset = (winner == game.home_team and old_home_elo < old_away_elo) or (winner == game.away_team and old_away_elo < old_home_elo)
         if upset:
             self.total_upsets += 1
@@ -413,5 +431,5 @@ if not current_sota:
     current_sota = DefaultTweakables()
 
 baseModel = Model(current_sota)
-IterateUntilStable(baseModel)
+# IterateUntilStable(baseModel)
 JustRunModel(baseModel)

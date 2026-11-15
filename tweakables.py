@@ -7,6 +7,12 @@ class InstantiatedTweakables:
     changed_value: str|None
 
     k: float
+    playoff_k_multiplier: float
+    non_playoff_bowl_k_multiplier: float
+    early_in_season_k_bonus: float
+    early_in_season_k_bonus_falloff: float
+    early_in_sample_k_bonus: float
+    early_in_sample_k_bonus_falloff: float
     scale_factor: float
     p5_initial_elo: float
     g5_initial_elo: float
@@ -40,19 +46,25 @@ def DefaultTweakables() -> InstantiatedTweakables:
     return InstantiatedTweakables(
         changed_value=None,
         k=90.0,
-        scale_factor=400.0,
+        playoff_k_multiplier=1.0,
+        non_playoff_bowl_k_multiplier=1.0,
+        early_in_season_k_bonus=10,
+        early_in_season_k_bonus_falloff=0.1,
+        early_in_sample_k_bonus=90,
+        early_in_sample_k_bonus_falloff=0.1,
+        scale_factor=404.0,
         p5_initial_elo=1500.0,
         g5_initial_elo=1000.0,
         fcs_initial_elo=787.5,
-        d2_initial_elo=550.0,
+        d2_initial_elo=687.5,
         d3_initial_elo=50.0,
         beatdown_threshold=16,
         return_to_base_in_offseason_factor=0.1856,
         return_to_conference_average_in_offseason_factor=0.1485,
         independents_extra_return_to_base_in_offseason_factor=0.005,
-        independents_return_to_conference_average_in_offseason_factor=0.135,
-        initial_top_25_bonus_base=100.0,
-        initial_top_25_bonus_marginal=25.0
+        independents_return_to_conference_average_in_offseason_factor=0.0675,
+        initial_top_25_bonus_base=2500.0,
+        initial_top_25_bonus_marginal=100.0
     )
 
 
