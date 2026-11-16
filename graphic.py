@@ -27,11 +27,11 @@ def generate_graphic(model):
     with open(TEMPLATE_FILE, "r") as f:
         template = f.read()
 
-    team_data = model.get_top_25()
+    team_data = model.get_top_n(25)
     left_rows = ""
     right_rows = ""
     for team_info in team_data:
-        row_html = html_for_team(team_info["rank"], team_info["team"], team_info["record"])
+        row_html = html_for_team(team_info["rank"], team_info["team_name"], team_info["record"])
         if team_info["rank"] <= 13:
             left_rows += row_html
         else:

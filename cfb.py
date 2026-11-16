@@ -6,12 +6,12 @@ import graphic
 import json
 from collections import defaultdict
 from tweakables import InstantiatedTweakables, NextIterationTweakables, DefaultTweakables
-from dataclasses import replace, asdict
+from dataclasses import dataclass, replace, asdict
 
 global all_games
 all_games: dict[int, list[cfbd.Game]] = {} # type: ignore
 
-PRINT_TEAMS = ["Miami (Combined)"]
+PRINT_TEAMS = ["Miami (Combined)", "UCLA", "Ohio State"]
 # PRINT_TEAMS = []
 CALIBRATION_CUTOFF = 2015
 
@@ -63,24 +63,41 @@ def is_p5(team, conference: str|None, year: int):
         return True
     return conference in ["ACC", "Big Ten", "Big 12", "Pac-12", "SEC", "Big East", "Pac-10"]
 
+
+@dataclass(slots=True)
+class Team:
+    name: str
+    elo_rating: float
+    total_wins: int = 0
+    wins_this_year: int = 0
+    losses_this_year: int = 0
+    points_scored_this_year: int = 0
+    points_allowed_this_year: int = 0
+    current_classification: str|None = None
+    current_conference: str|None = None
+
+    def __init__(self, name: str, elo: float):
+        self.name = name
+        self.elo_rating = elo
+        self.total_wins = 0
+        self.wins_this_year = 0
+        self.losses_this_year = 0
+        self.points_scored_this_year = 0
+        self.points_allowed_this_year = 0
+        self.current_classification = None
+        self.current_conference = None
+
 class Model:
     def __init__(self, tweakables: InstantiatedTweakables):
-        self.total_wins: dict[str, int] = {}
-        self.wins_this_year: dict[str, int] = defaultdict(int)
-        self.losses_this_year: dict[str, int] = defaultdict(int) 
+        self.teams: dict[str, Team] = {}
         self.current_year: int = 0
         self.current_week: int|Literal["Postseason"] = 0
         self.last_week_with_games: int|Literal["Postseason"] = 0
-        self.points_scored_this_year: dict[str, int] = defaultdict(int)
-        self.points_allowed_this_year: dict[str, int] = defaultdict(int)
         self.tweakables = tweakables
-        self.elo_ratings: dict[str, float] = {}
         self.total_upsets = 0
         self.total_post_cutoff_upsets = 0
         self.error = 0
-        self.most_current_classifications: dict[str, str|None] = {}
-        self.most_current_conferences: dict[str,str|None] = {}
-        self.last_week_top_25: list[str] = []
+        self.last_week_top_25: list[Team] = []
         self.ranked_vs_ranked_games = 0
         self.ranked_vs_ranked_upsets = 0
 
@@ -89,7 +106,7 @@ class Model:
             if JOKE_MIAMI_MODE and team == "Miami":
                 team = "Miami (Combined)"
             # Marshall gets the P5 bonus despite not being in the P5.  They earned it for ending ranked 10.
-            self.elo_ratings[team] = self.tweakables.p5_initial_elo + self.tweakables.initial_top_25_bonus_base + i * self.tweakables.initial_top_25_bonus_marginal
+            self.teams[team] = Team(name=team, elo=(self.tweakables.p5_initial_elo + self.tweakables.initial_top_25_bonus_base + i * self.tweakables.initial_top_25_bonus_marginal))
 
     def initial_elo(self, team:str, classification: str|None, conference: str|None):
         if classification == "fbs": # TODO: Factor in P5 vs G5
@@ -113,9 +130,9 @@ class Model:
             # raise ValueError(f"Unknown classification '{classification}' for team '{team}'!")
 
 
-    def adjust_elo(self, k:float, home_team: str, away_team: str, home_points: int, away_points: int):
-        home_elo = self.elo_ratings[home_team]
-        away_elo = self.elo_ratings[away_team]
+    def adjust_elo(self, k:float, home_team: Team, away_team: Team, home_points: int, away_points: int):
+        home_elo = home_team.elo_rating
+        away_elo = away_team.elo_rating
 
         expected_home = 1 / (1 + 10 ** ((away_elo - home_elo) / self.tweakables.scale_factor))
         expected_away = 1 / (1 + 10 ** ((home_elo - away_elo) / self.tweakables.scale_factor))
@@ -123,8 +140,8 @@ class Model:
         actual_home = 1.0 if home_points > away_points else 0.0
         actual_away = 1.0 if away_points > home_points else 0.0
 
-        self.elo_ratings[home_team] += k * (actual_home - expected_home)
-        self.elo_ratings[away_team] += k * (actual_away - expected_away)
+        home_team.elo_rating += k * (actual_home - expected_home)
+        away_team.elo_rating += k * (actual_away - expected_away)
 
 
     def record_game(self, game: cfbd.Game): # pyright: ignore[reportPrivateImportUsage]
@@ -136,11 +153,17 @@ class Model:
         if game.home_points is None or game.away_points is None:
             print(f"Skipping game with incomplete score: {game.home_team} vs {game.away_team}")
             return
+
+        if not game.home_team in self.teams:
+            self.teams[game.home_team] = Team(name=game.home_team, elo=self.initial_elo(game.home_team, game.home_classification, game.home_conference))
+        if not game.away_team in self.teams:
+            self.teams[game.away_team] = Team(name=game.away_team, elo=self.initial_elo(game.away_team, game.away_classification, game.away_conference))
+
+        home_team = self.teams[game.home_team]
+        away_team = self.teams[game.away_team]
         
-        winner = game.home_team if game.home_points > game.away_points else game.away_team
-        if winner not in self.total_wins:
-            self.total_wins[winner] = 0
-        self.total_wins[winner] += 1
+        winner = home_team if game.home_points > game.away_points else away_team
+        winner.total_wins += 1
 
         is_playoff = game.playoff is not None
         is_non_playoff_bowl = (self.current_week == "Postseason") and not is_playoff
@@ -158,31 +181,27 @@ class Model:
         k_early_in_sample_bonus = self.tweakables.early_in_sample_k_bonus * (self.tweakables.early_in_sample_k_bonus_falloff ** (year_in_sample - 1))
         k += k_early_in_sample_bonus
 
-        if game.home_team not in self.elo_ratings:
-            self.elo_ratings[game.home_team] = self.initial_elo(game.home_team, game.home_classification, game.home_conference)
-        if game.away_team not in self.elo_ratings:
-            self.elo_ratings[game.away_team] = self.initial_elo(game.away_team, game.away_classification, game.away_conference)
-        old_home_elo = self.elo_ratings[game.home_team]
-        old_away_elo = self.elo_ratings[game.away_team]
-        self.adjust_elo(k, game.home_team, game.away_team, game.home_points, game.away_points)
+        old_home_elo = home_team.elo_rating
+        old_away_elo = away_team.elo_rating
+        self.adjust_elo(k, home_team, away_team, game.home_points, game.away_points)
         beatdown = abs(game.home_points - game.away_points) >= self.tweakables.beatdown_threshold
         if beatdown:
-            self.adjust_elo(k, game.home_team, game.away_team, game.home_points, game.away_points)
-        upset = (winner == game.home_team and old_home_elo < old_away_elo) or (winner == game.away_team and old_away_elo < old_home_elo)
+            self.adjust_elo(k, home_team, away_team, game.home_points, game.away_points)
+        upset = (winner is home_team and old_home_elo < old_away_elo) or (winner is away_team and old_away_elo < old_home_elo)
         if upset:
             self.total_upsets += 1
             if game.season >= CALIBRATION_CUTOFF:
                 self.total_post_cutoff_upsets += 1
-                self.error += self.error_for_game(game.home_team, game.away_team, game.home_classification, game.away_classification)
-        is_ranked_vs_ranked = game.home_team in self.last_week_top_25 and game.away_team in self.last_week_top_25
+                self.error += self.error_for_game(home_team, away_team, game.home_classification, game.away_classification)
+        is_ranked_vs_ranked = home_team in self.last_week_top_25 and away_team in self.last_week_top_25
         if is_ranked_vs_ranked and game.season >= CALIBRATION_CUTOFF:
             self.ranked_vs_ranked_games += 1
             if upset:
                 self.ranked_vs_ranked_upsets += 1
         
-        if game.home_team in PRINT_TEAMS or game.away_team in PRINT_TEAMS:
+        if home_team.name in PRINT_TEAMS or away_team.name in PRINT_TEAMS:
             note_str = f"({game.notes})" if game.notes else ""
-            print(f"\n{game.home_team} vs {game.away_team} on {game.start_date} (Week {game.week} {game.season}) {note_str}")
+            print(f"\n{home_team.name} vs {away_team.name} on {game.start_date} (Week {game.week} {game.season}) {note_str}")
             beatdown_upset_str = ""
             if beatdown:
                 beatdown_upset_str += f"(Beatdown: {abs(game.home_points - game.away_points)}) "
@@ -191,27 +210,24 @@ class Model:
             if beatdown and upset:
                 beatdown_upset_str = "(UPSET BEATDOWN!)"
             print(f"    Score: {game.home_points}-{game.away_points} {beatdown_upset_str}")
-            print(f"    Elo change: {old_home_elo} -> {self.elo_ratings[game.home_team]} for {game.home_team}, {old_away_elo} -> {self.elo_ratings[game.away_team]} for {game.away_team}")
+            print(f"    Elo change: {old_home_elo} -> {home_team.elo_rating} for {home_team.name}, {old_away_elo} -> {away_team.elo_rating} for {away_team.name}")
     
         if game.season == self.current_year:
             self.last_week_with_games = self.current_week
-            self.wins_this_year[winner] += 1
-            loser = game.away_team if winner == game.home_team else game.home_team
-            self.losses_this_year[loser] += 1
-            self.points_scored_this_year[game.home_team] += game.home_points
-            self.points_scored_this_year[game.away_team] += game.away_points
-            self.points_allowed_this_year[game.home_team] += game.away_points
-            self.points_allowed_this_year[game.away_team] += game.home_points
+            winner.wins_this_year += 1
+            loser = away_team if winner is home_team else home_team
+            loser.losses_this_year += 1
+            home_team.points_scored_this_year += game.home_points
+            away_team.points_scored_this_year += game.away_points
+            home_team.points_allowed_this_year += game.away_points
+            away_team.points_allowed_this_year += game.home_points
 
-        self.most_current_classifications[game.home_team] = game.home_classification
-        self.most_current_classifications[game.away_team] = game.away_classification
-        self.most_current_conferences[game.home_team] = game.home_conference
-        self.most_current_conferences[game.away_team] = game.away_conference
-
-        if game.home_classification != "fbs" and game.away_classification != "fbs":
-            print(f"Non-FBS game: {game.home_team} ({game.home_classification}) vs {game.away_team} ({game.away_classification}) on {game.start_date}")
-
-    def error_for_game(self, home_team: str, away_team: str, home_classification: str|None = None, away_classification: str|None = None):
+        home_team.current_classification = game.home_classification
+        away_team.current_classification = game.away_classification
+        home_team.current_conference = game.home_conference
+        away_team.current_conference = game.away_conference
+        
+    def error_for_game(self, home_team: Team, away_team: Team, home_classification: str|None = None, away_classification: str|None = None):
         # No additional penalty for Top-25 vs Top-25 because of an amazing bug:
         # It turns out that if you minimize "Ranked vs Ranked upsets", the result is that the model tries to optimize by minimizing the number of Top-25 vs Top-25 *games!*
         # 2 points for top-25 matchups
@@ -223,27 +239,27 @@ class Model:
         # 0.1 point for either team being non-fbs
         return 0.1
 
-    def get_conference_averages(self):
-        result = {}
-        conference_teams = defaultdict(set)
-        for team, conference in self.most_current_conferences.items():
+    def get_conference_averages(self) -> dict[str, float]:
+        result: dict[str, float] = {}
+        conference_teams: defaultdict[str, set[str]] = defaultdict(set)
+        for _, team in self.teams.items():
+            conference = team.current_conference
             if conference:
-                conference_teams[conference].add(team)
+                conference_teams[conference].add(team.name)
         for conference, teams in conference_teams.items():
             num_teams = 0
             total_elo = 0
-            for team in teams:
+            for team_name in teams:
                 num_teams += 1
-                total_elo += self.elo_ratings[team]
+                total_elo += self.teams[team_name].elo_rating
             result[conference] = total_elo / num_teams
-            # print(f"Average Elo for {conference} in {self.current_year}: {total_elo / num_teams}")
-        # print(f"Also, Notre Dame's conference in {self.current_year}: {self.most_current_conferences.get('Notre Dame', 'Unknown')} and BYU's is {self.most_current_conferences.get('BYU', 'Unknown')}")
+            print(f"Average Elo for {conference} in {self.current_year}: {total_elo / num_teams}")
         return result
 
     def handle_new_week(self, new_week: int|Literal["Postseason"]):
         # This may be a performance issue - if it is, we should get the top 25 the dumb O(25*n) way instead of by sorting.
         # (Although nlogn is actually less than 25*n for 300 teams)
-        self.last_week_top_25 = [team_info['team'] for team_info in self.get_top_n(25)]
+        self.last_week_top_25 = [team_info['team_object'] for team_info in self.get_top_n(25)]
         self.current_week = new_week
         # print(f"Handling new week: {new_week}")
 
@@ -251,53 +267,53 @@ class Model:
         # Reset yearly statistics at the start of the new year
         self.current_year = new_year
         self.current_week = 0
-        self.wins_this_year = defaultdict(int)
-        self.losses_this_year = defaultdict(int)
-        self.points_scored_this_year = defaultdict(int)
-        self.points_allowed_this_year = defaultdict(int)
+        for team in self.teams.values():
+            team.wins_this_year = 0
+            team.losses_this_year = 0
+            team.points_scored_this_year = 0
+            team.points_allowed_this_year = 0
 
         conference_averages = self.get_conference_averages()
 
         # Return to base
-        for team, elo in self.elo_ratings.items():
-            base_elo = self.initial_elo(team, self.most_current_classifications[team], self.most_current_conferences[team])
-            diff = elo - base_elo
-            self.elo_ratings[team] -= (diff * self.tweakables.return_to_base_in_offseason_factor)
-            if self.most_current_conferences[team] in conference_averages:
-                conf_avg = conference_averages[self.most_current_conferences[team]]
-                if self.most_current_conferences[team] in ["FBS Independents", "FCS Independents"]:
-                    new_diff = self.elo_ratings[team] - base_elo
-                    self.elo_ratings[team] -= (new_diff * self.tweakables.independents_extra_return_to_base_in_offseason_factor)
-                    self.elo_ratings[team] += (conf_avg - self.elo_ratings[team]) * self.tweakables.independents_return_to_conference_average_in_offseason_factor
+        for team_name, team in self.teams.items():
+            current_elo = team.elo_rating
+            base_elo = self.initial_elo(team_name, team.current_classification, team.current_conference)
+            diff = current_elo - base_elo
+            team.elo_rating -= (diff * self.tweakables.return_to_base_in_offseason_factor)
+            if team.current_conference in conference_averages:
+                conf_avg = conference_averages[team.current_conference]
+                if team.current_conference in ["FBS Independents", "FCS Independents"]:
+                    new_diff = team.elo_rating - base_elo
+                    team.elo_rating -= (new_diff * self.tweakables.independents_extra_return_to_base_in_offseason_factor)
+                    team.elo_rating += (conf_avg - team.elo_rating) * self.tweakables.independents_return_to_conference_average_in_offseason_factor
                 else:
-                    self.elo_ratings[team] += (conf_avg - self.elo_ratings[team]) * self.tweakables.return_to_conference_average_in_offseason_factor
+                    team.elo_rating += (conf_avg - team.elo_rating) * self.tweakables.return_to_conference_average_in_offseason_factor
 
-        if not self.elo_ratings:
+        if not self.teams:
             self.initialize_initial_top_25()
 
 
     def print_top_ranks(self):
         for team_info in self.get_top_n(25):
-            print(f"{team_info['rank']}. {team_info['team']}: {team_info['record']}  ({team_info['elo']} Elo)")
+            print(f"{team_info['rank']}. {team_info['team_name']}: {team_info['record']}  ({team_info['elo']} Elo)")
 
     def get_top_n(self, n: int) -> list[dict]:
-        sorted_teams = sorted(self.elo_ratings.items(), key=lambda item: item[1], reverse=True)
+        sorted_teams = sorted(self.teams.values(), key=lambda item: item.elo_rating, reverse=True)
         if FILTER_TO_TEAMS_THAT_PLAYED_THIS_YEAR:
-            sorted_teams = [team for team in sorted_teams if (team[0] in self.wins_this_year or team[0] in self.losses_this_year)]
+            sorted_teams = [team for team in sorted_teams if (team.wins_this_year or team.losses_this_year)]
         top_n = []
-        for i, (team, _) in enumerate(sorted_teams[:n], start=1):
+        for i, team in enumerate(sorted_teams[:n], start=1):
             top_n.append({
                 "rank": i,
-                "team": team,
-                "record": f"{self.wins_this_year[team]}-{self.losses_this_year[team]}",
-                "total_wins": self.total_wins.get(team, 0),
-                "points_scored": self.points_scored_this_year[team],
-                "elo": self.elo_ratings[team]
+                "team_name": team.name,
+                "team_object": team,
+                "record": f"{team.wins_this_year}-{team.losses_this_year}",
+                "total_wins": team.total_wins,
+                "points_scored": team.points_scored_this_year,
+                "elo": team.elo_rating
             })
         return top_n
-
-    def get_top_25(self) -> list[dict]:
-        return self.get_top_n(25)
 
     def model_error(self) -> float:
         ranked_vs_ranked_upset_fraction = self.ranked_vs_ranked_upsets / self.ranked_vs_ranked_games
